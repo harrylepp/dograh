@@ -42,3 +42,33 @@ source venv/bin/activate && set -a && source api/.env.test && set +a && python -
 # Backend scripts
 source venv/bin/activate && set -a && source api/.env && set +a && python -m scripts.dump_docs_openapi
 ```
+
+## Codebase Knowledge Graph (graphify)
+
+A persistent knowledge graph of this repo lives in `graphify-out/`. Use it for codebase questions instead of reading files end-to-end - one query answers what would otherwise cost many file reads and follow-up questions.
+
+**Scope**: full repo minus the `pipecat/` submodule. 11,745 nodes, 27,689 edges, 596 communities, 26 hyperedges. Built from 1,034 code files (AST, deterministic, free) + 216 docs (semantic, subagent-extracted). 74 images and 6 audio fixtures are not yet in the graph - add with `graphify --update` if needed.
+
+**When to use it** (preferred over ad-hoc file reading):
+- "How does X work?" / "What calls Y?" / "Trace the data flow through Z"
+- "What's the relationship between A and B?"
+- Finding cross-module connections, god nodes, import cycles
+
+**Commands** (run from repo root):
+```bash
+graphify query "how does campaign orchestration connect to telephony providers?"  # BFS, broad context
+graphify query "..." --dfs          # trace a specific path
+graphify query "..." --budget 1500  # cap answer tokens
+graphify path "WorkflowGraph" "TwilioProvider"   # shortest path between two concepts
+graphify explain "PipecatEngine"    # plain-language explanation of a node
+```
+
+**Refresh after code changes**:
+```bash
+graphify --update          # incremental - re-extract only new/changed files
+graphify --cluster-only    # rerun clustering on existing graph
+```
+
+Outputs: `graphify-out/graph.html` (interactive, community-aggregated), `graphify-out/GRAPH_REPORT.md` (audit report with god nodes, surprising connections, suggested questions), `graphify-out/graph.json` (raw data).
+
+Core abstractions (god nodes): `BaseModel`, `UserModel`, `HTTPException`, `PipecatEngine`, `WorkflowGraph`, `cn()`, `UserConfigurationValidator`, `ServiceProviders`, `WorkflowRunMode`, `ReactFlowDTO`.
