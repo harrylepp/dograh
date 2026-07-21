@@ -20,7 +20,7 @@ def generate_embed_script(token: EmbedTokenModel) -> str:
     """Generate the embed script for a given token."""
     base_url = str(UI_APP_URL).rstrip("/")
 
-    return f"""<!-- Dograh Voice Widget -->
+    return f"""<!-- Dograh Voice and Chat Widget -->
 <script>
   (function(d, s, id) {{
     var js, fjs = d.getElementsByTagName(s)[0];

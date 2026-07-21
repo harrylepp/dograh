@@ -67,6 +67,8 @@ export function EmbedDialog({
     const [buttonText, setButtonText] = useState("Talk to Agent");
     const [buttonColor, setButtonColor] = useState("#10b981");
     const [callToActionText, setCallToActionText] = useState("Click to start voice conversation");
+    const [chatEnabled, setChatEnabled] = useState(true);
+    const [defaultMode, setDefaultMode] = useState<"voice" | "chat">("voice");
 
     const loadEmbedToken = useCallback(async () => {
         setLoading(true);
@@ -87,6 +89,19 @@ export function EmbedDialog({
                     setButtonText(settings.buttonText || "Talk to Agent");
                     setButtonColor(settings.buttonColor || "#10b981");
                     setCallToActionText(settings.callToActionText || "Click to start voice conversation");
+
+                    // Modes configuration (voice/chat). Backend defaults to
+                    // ["voice","chat"] with defaultMode "voice" when unset.
+                    const rawSettings = response.data.settings as Record<string, unknown>;
+                    const modes = Array.isArray(rawSettings.modes)
+                        ? (rawSettings.modes as string[])
+                        : null;
+                    setChatEnabled(modes ? modes.includes("chat") : true);
+                    const storedDefaultMode =
+                        typeof rawSettings.defaultMode === "string"
+                            ? rawSettings.defaultMode
+                            : "voice";
+                    setDefaultMode(storedDefaultMode === "chat" ? "chat" : "voice");
                 }
 
                 // Load domains
@@ -131,6 +146,8 @@ export function EmbedDialog({
                             size: "medium",
                             autoStart: false,
                             containerId: embedMode === "inline" ? "dograh-inline-container" : undefined,
+                            modes: chatEnabled ? ["voice", "chat"] : ["voice"],
+                            defaultMode: chatEnabled ? defaultMode : "voice",
                         },
                         usage_limit: null,
                         expires_in_days: null,
@@ -536,6 +553,40 @@ document.getElementById('talk-btn').addEventListener('click', () => {
                                             </div>
                                         </div>
                                     )}
+
+                                    {/* Voice/Chat Modes */}
+                                    <div className="space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <div className="space-y-0.5">
+                                                <Label htmlFor="chat-enabled">Enable Chat</Label>
+                                                <p className="text-sm text-muted-foreground">
+                                                    Allow visitors to text-chat in addition to voice
+                                                </p>
+                                            </div>
+                                            <Switch
+                                                id="chat-enabled"
+                                                checked={chatEnabled}
+                                                onCheckedChange={setChatEnabled}
+                                            />
+                                        </div>
+                                        {chatEnabled && (
+                                            <div className="space-y-2">
+                                                <Label htmlFor="default-mode" className="text-sm">Default Mode</Label>
+                                                <Select
+                                                    value={defaultMode}
+                                                    onValueChange={(value) => setDefaultMode(value as "voice" | "chat")}
+                                                >
+                                                    <SelectTrigger id="default-mode">
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value="voice">Voice</SelectItem>
+                                                        <SelectItem value="chat">Chat</SelectItem>
+                                                    </SelectContent>
+                                                </Select>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
 
                                 <Separator />
@@ -585,7 +636,7 @@ document.getElementById('talk-btn').addEventListener('click', () => {
                                                 </pre>
                                             </div>
                                             <p className="text-xs text-muted-foreground">
-                                                Add this script to your website&apos;s HTML to enable the voice widget.
+                                                Add this script to your website&apos;s HTML to enable the voice and chat widget.
                                                 Configuration changes will apply automatically without re-embedding.
                                             </p>
                                         </div>

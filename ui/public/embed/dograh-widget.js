@@ -1,5 +1,5 @@
 /**
- * Dograh Voice Widget
+ * Dograh Voice and Chat Widget
  * Embeddable voice call widget for Dograh workflows
  * Version: 1.0.0
  */
