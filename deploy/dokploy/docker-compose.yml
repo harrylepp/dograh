@@ -55,7 +55,9 @@ services:
       - app-network
 
   api:
-    image: ${REGISTRY:-dograhai}/dograh-api:${DOGRAH_VERSION:-latest}
+    build:
+      context: ../..
+      dockerfile: api/Dockerfile
     restart: unless-stopped
     environment:
       ENVIRONMENT: "${ENVIRONMENT:-production}"
