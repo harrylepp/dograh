@@ -61,6 +61,8 @@ class EmbedConfigResponse(BaseModel):
     button_color: str
     size: str
     auto_start: bool
+    modes: list[str]
+    default_mode: str
 
 
 def validate_origin(origin: str, allowed_domains: list) -> bool:
@@ -206,6 +208,31 @@ async def _turn_credentials_preflight_response(
     return _cors_response(origin, "GET, OPTIONS")
 
 
+async def _text_chat_preflight_response(
+    session_token: str, origin: str
+) -> Response:
+    """Preflight validation for public text-chat state/messages endpoints.
+
+    Mirrors ``_turn_credentials_preflight_response`` but allows GET and POST
+    since text-chat state is read with GET and messages are appended with POST.
+    """
+    embed_session = await db_client.get_embed_session_by_token(session_token)
+    if not embed_session:
+        return Response(status_code=403)
+
+    if embed_session.expires_at and embed_session.expires_at < datetime.now(UTC):
+        return Response(status_code=403)
+
+    embed_token = await db_client.get_embed_token_by_id(embed_session.embed_token_id)
+    if not embed_token:
+        return Response(status_code=403)
+
+    if not validate_origin(origin, embed_token.allowed_domains or []):
+        return Response(status_code=403)
+
+    return _cors_response(origin, "GET, POST, OPTIONS")
+
+
 async def build_public_embed_preflight_response(
     path: str, origin: str, requested_method: str, api_prefix: str = "/api/v1"
 ) -> Response | None:
@@ -230,6 +257,19 @@ async def build_public_embed_preflight_response(
             return Response(status_code=405)
         session_token = path[len(turn_credentials_prefix) :].split("/", 1)[0]
         return await _turn_credentials_preflight_response(session_token, origin)
+
+    text_chat_init_path = f"{public_embed_prefix}/text-chat/init"
+    if path == text_chat_init_path:
+        if requested_method.upper() != "POST":
+            return Response(status_code=405)
+        return _cors_response(origin, "POST, OPTIONS")
+
+    text_chat_prefix = f"{public_embed_prefix}/text-chat/"
+    if path.startswith(text_chat_prefix):
+        if requested_method.upper() not in ("GET", "POST"):
+            return Response(status_code=405)
+        session_token = path[len(text_chat_prefix) :].split("/", 1)[0]
+        return await _text_chat_preflight_response(session_token, origin)
 
     return None
 
@@ -401,6 +441,16 @@ async def get_embed_config(token: str, request: Request, response: Response):
     # Extract settings with defaults
     settings = embed_token.settings or {}
 
+    modes = settings.get("modes") or ["voice", "chat"]
+    default_mode = settings.get("defaultMode") or "voice"
+    # Mirror modes/defaultMode into the settings dict so the widget can read
+    # them either from the top-level fields or from settings.
+    settings = {
+        **settings,
+        "modes": modes,
+        "defaultMode": default_mode,
+    }
+
     return EmbedConfigResponse(
         workflow_id=embed_token.workflow_id,
         settings=settings,
@@ -410,6 +460,8 @@ async def get_embed_config(token: str, request: Request, response: Response):
         button_color=settings.get("buttonColor", "#3B82F6"),
         size=settings.get("size", "medium"),
         auto_start=settings.get("autoStart", False),
+        modes=modes,
+        default_mode=default_mode,
     )
 
 

@@ -32,6 +32,23 @@
     turnCredentials: null, // TURN server credentials
     callStartedAt: null, // Timestamp when call connected (for duration tracking)
     gracefulDisconnect: false,
+    // Text-chat state
+    mode: 'voice', // 'voice' | 'chat'
+    chatSessionToken: null,
+    chatRunId: null,
+    chatRevision: null,
+    chatTurns: [],
+    chatStatus: 'idle',
+    chatSending: false,
+    chatSessionInited: false,
+    chatDraft: '',
+    chatError: null,
+    inlineDisplayText: null,
+    inlineDisplaySubtext: null,
+    chatCallbacks: {
+      onChatMessage: null,
+      onChatStatusChange: null
+    },
     callbacks: {
       onReady: null,
       onCallStart: null,
@@ -120,8 +137,24 @@
         buttonColor: configData.settings?.buttonColor || '#10b981',
         buttonText: configData.settings?.buttonText || 'Talk to Agent',
         callToActionText: configData.settings?.callToActionText || 'Click to start voice conversation',
-        autoStart: configData.auto_start || false
+        autoStart: configData.auto_start || false,
+        modes: parseModes(configData.settings?.modes),
+        defaultMode: configData.default_mode || configData.settings?.defaultMode || 'voice'
       };
+
+      // Resolve active mode: honor default if available, otherwise first mode.
+      const configuredModes = state.config.modes;
+      if (configuredModes.length > 0) {
+        state.mode = configuredModes.includes(state.config.defaultMode)
+          ? state.config.defaultMode
+          : configuredModes[0];
+      } else {
+        state.mode = 'voice';
+      }
+      // If only one mode is configured, lock to it.
+      if (configuredModes.length === 1) {
+        state.mode = configuredModes[0];
+      }
     } catch (error) {
       console.error('Dograh Widget: Failed to fetch configuration', error);
       return;
@@ -162,6 +195,40 @@
       console.warn('Dograh Widget: Invalid context variables', e);
       return {};
     }
+  }
+
+  /**
+   * Normalize the configured modes list. Defaults to voice + chat.
+   * Invalid entries are dropped; duplicates removed; order preserved.
+   */
+  function parseModes(rawModes) {
+    const allowed = ['voice', 'chat'];
+    if (!Array.isArray(rawModes) || rawModes.length === 0) {
+      return ['voice', 'chat'];
+    }
+    const seen = [];
+    for (const entry of rawModes) {
+      const value = typeof entry === 'string' ? entry.toLowerCase() : '';
+      if (allowed.includes(value) && !seen.includes(value)) {
+        seen.push(value);
+      }
+    }
+    return seen.length > 0 ? seen : ['voice', 'chat'];
+  }
+
+  /**
+   * Whether both voice and chat modes are available (toggle visible).
+   */
+  function bothModesAvailable() {
+    const modes = state.config.modes || [];
+    return modes.includes('voice') && modes.includes('chat');
+  }
+
+  /**
+   * Whether chat UI may be rendered at all.
+   */
+  function chatEnabled() {
+    return (state.config.modes || []).includes('chat');
   }
 
   /**
@@ -242,6 +309,233 @@
     document.head.appendChild(styleSheet);
   }
 
+  /**
+   * Inject chat + mode-toggle styles (idempotent). Shared by floating and
+   * inline modes so chat UI renders consistently in both.
+   */
+  function injectChatStyles() {
+    if (document.getElementById('dograh-chat-styles')) return;
+
+    const accent = state.config.buttonColor || '#10b981';
+
+    const styles = `
+      .dograh-widget-container {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .dograh-widget-container.bottom-right,
+      .dograh-widget-container.top-right { align-items: flex-end; }
+      .dograh-widget-container.bottom-left,
+      .dograh-widget-container.top-left { align-items: flex-start; }
+
+      .dograh-mode-toggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        padding: 3px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.95);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+      .dograh-mode-toggle-btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 12px;
+        border: none;
+        background: transparent;
+        border-radius: 9px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #4b5563;
+        cursor: pointer;
+        transition: background 150ms ease, color 150ms ease;
+      }
+      .dograh-mode-toggle-btn:hover { color: #111827; }
+      .dograh-mode-toggle-btn.dograh-active {
+        background: #111827;
+        color: #ffffff;
+      }
+
+      .dograh-chat-panel {
+        display: flex;
+        flex-direction: column;
+        background: #ffffff;
+        border-radius: 16px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+        overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+      .dograh-chat-panel.dograh-chat-panel-floating {
+        width: 340px;
+        height: 460px;
+      }
+      .dograh-chat-panel.dograh-chat-panel-inline {
+        width: 100%;
+        height: 100%;
+        flex: 1;
+        min-height: 320px;
+        border-radius: 12px;
+      }
+
+      .dograh-chat-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 16px;
+        border-bottom: 1px solid #e5e7eb;
+        background: #fafafa;
+      }
+      .dograh-chat-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: #111827;
+      }
+      .dograh-chat-status {
+        font-size: 11px;
+        font-weight: 500;
+        color: #6b7280;
+        text-transform: capitalize;
+      }
+
+      .dograh-chat-messages {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        padding: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        background: #f9fafb;
+      }
+      .dograh-chat-empty {
+        margin: auto;
+        font-size: 13px;
+        color: #9ca3af;
+        text-align: center;
+      }
+
+      .dograh-chat-bubble {
+        max-width: 78%;
+        padding: 9px 13px;
+        border-radius: 16px;
+        font-size: 14px;
+        line-height: 1.45;
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        animation: dograh-chat-in 160ms ease-out;
+      }
+      .dograh-chat-bubble.dograh-chat-user {
+        align-self: flex-end;
+        background: #111827;
+        color: #ffffff;
+        border-bottom-right-radius: 4px;
+      }
+      .dograh-chat-bubble.dograh-chat-assistant {
+        align-self: flex-start;
+        background: #ffffff;
+        color: #111827;
+        border: 1px solid #e5e7eb;
+        border-bottom-left-radius: 4px;
+        border-left: 3px solid ${accent};
+      }
+
+      .dograh-chat-typing {
+        align-self: flex-start;
+        background: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-left: 3px solid ${accent};
+        border-radius: 16px;
+        border-bottom-left-radius: 4px;
+        padding: 12px 14px;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+      .dograh-chat-typing span {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #9ca3af;
+        animation: dograh-chat-bounce 1.2s infinite ease-in-out;
+      }
+      .dograh-chat-typing span:nth-child(2) { animation-delay: 0.15s; }
+      .dograh-chat-typing span:nth-child(3) { animation-delay: 0.3s; }
+      @keyframes dograh-chat-bounce {
+        0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
+        40% { transform: scale(1); opacity: 1; }
+      }
+      @keyframes dograh-chat-in {
+        from { opacity: 0; transform: translateY(4px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      .dograh-chat-error {
+        padding: 8px 12px;
+        font-size: 12px;
+        color: #b91c1c;
+        background: #fef2f2;
+        border-top: 1px solid #fee2e2;
+        display: none;
+      }
+      .dograh-chat-error.dograh-visible { display: block; }
+
+      .dograh-chat-input-row {
+        display: flex;
+        align-items: flex-end;
+        gap: 8px;
+        padding: 10px 12px;
+        border-top: 1px solid #e5e7eb;
+        background: #ffffff;
+      }
+      .dograh-chat-input {
+        flex: 1;
+        min-height: 40px;
+        max-height: 120px;
+        padding: 9px 12px;
+        border: 1px solid #d1d5db;
+        border-radius: 10px;
+        font-size: 14px;
+        line-height: 1.4;
+        font-family: inherit;
+        resize: none;
+        outline: none;
+        transition: border-color 150ms ease, box-shadow 150ms ease;
+      }
+      .dograh-chat-input:focus {
+        border-color: ${accent};
+        box-shadow: 0 0 0 3px ${accent}22;
+      }
+      .dograh-chat-input:disabled { background: #f3f4f6; cursor: not-allowed; }
+      .dograh-chat-send {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        height: 40px;
+        min-width: 56px;
+        padding: 0 14px;
+        border: none;
+        border-radius: 10px;
+        background: ${accent};
+        color: #ffffff;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: filter 150ms ease, transform 100ms ease;
+      }
+      .dograh-chat-send:hover { filter: brightness(1.08); }
+      .dograh-chat-send:active { transform: scale(0.97); }
+      .dograh-chat-send:disabled { opacity: 0.6; cursor: not-allowed; }
+    `;
+
+    const styleSheet = document.createElement('style');
+    styleSheet.id = 'dograh-chat-styles';
+    styleSheet.textContent = styles;
+    document.head.appendChild(styleSheet);
+  }
+
   function ctaLabelForStatus(status) {
     switch (status) {
       case 'connecting': return 'Connecting…';
@@ -272,17 +566,9 @@
   }
 
   /**
-   * Render the floating CTA pill. Re-renders preserve the hidden audio
-   * element so an in-progress call is not interrupted on status changes.
+   * Build the voice CTA pill button for the current connection status.
    */
-  function renderFloating() {
-    const container = document.getElementById('dograh-widget-root');
-    if (!container) return;
-
-    Array.from(container.children).forEach((child) => {
-      if (child !== state.audioElement) container.removeChild(child);
-    });
-
+  function renderVoiceCta() {
     const status = state.connectionStatus || 'idle';
 
     const button = document.createElement('button');
@@ -305,7 +591,445 @@
     button.querySelector('span').textContent = ctaLabelForStatus(status);
     button.onclick = toggleCall;
 
-    container.appendChild(button);
+    return button;
+  }
+
+  /**
+   * Build the segmented Voice|Chat mode toggle. Returns null when the toggle
+   * should be hidden (single mode or chat unavailable).
+   */
+  function renderModeToggle() {
+    if (!bothModesAvailable()) return null;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'dograh-mode-toggle';
+
+    const voiceBtn = document.createElement('button');
+    voiceBtn.type = 'button';
+    voiceBtn.className = 'dograh-mode-toggle-btn' + (state.mode === 'voice' ? ' dograh-active' : '');
+    voiceBtn.textContent = 'Voice';
+    voiceBtn.onclick = () => setMode('voice');
+
+    const chatBtn = document.createElement('button');
+    chatBtn.type = 'button';
+    chatBtn.className = 'dograh-mode-toggle-btn' + (state.mode === 'chat' ? ' dograh-active' : '');
+    chatBtn.textContent = 'Chat';
+    chatBtn.onclick = () => setMode('chat');
+
+    wrap.appendChild(voiceBtn);
+    wrap.appendChild(chatBtn);
+    return wrap;
+  }
+
+  /**
+   * Render the floating CTA pill. Re-renders preserve the hidden audio
+   * element so an in-progress call is not interrupted on status changes.
+   */
+  function renderFloating() {
+    const container = document.getElementById('dograh-widget-root');
+    if (!container) return;
+
+    Array.from(container.children).forEach((child) => {
+      if (child !== state.audioElement) container.removeChild(child);
+    });
+
+    const toggle = renderModeToggle();
+    if (toggle) {
+      injectChatStyles();
+      container.appendChild(toggle);
+    }
+
+    if (state.mode === 'chat' && chatEnabled()) {
+      injectChatStyles();
+      container.appendChild(renderChatPanel('floating'));
+    } else {
+      container.appendChild(renderVoiceCta());
+    }
+  }
+
+  /**
+   * Build a single chat bubble element.
+   */
+  function renderChatBubble(role, text) {
+    const bubble = document.createElement('div');
+    bubble.className = 'dograh-chat-bubble ' + (role === 'user' ? 'dograh-chat-user' : 'dograh-chat-assistant');
+    bubble.textContent = text;
+    return bubble;
+  }
+
+  /**
+   * Build the typing indicator (animated dots in an assistant bubble).
+   */
+  function renderChatTyping() {
+    const typing = document.createElement('div');
+    typing.className = 'dograh-chat-typing';
+    typing.innerHTML = '<span></span><span></span><span></span>';
+    return typing;
+  }
+
+  /**
+   * Build the chat panel (header + messages + input). Used by both floating
+   * and inline modes; `variant` controls sizing class.
+   */
+  function renderChatPanel(variant) {
+    injectChatStyles();
+
+    const panel = document.createElement('div');
+    panel.className = `dograh-chat-panel dograh-chat-panel-${variant}`;
+    panel.id = 'dograh-chat-panel';
+
+    // Header
+    const header = document.createElement('div');
+    header.className = 'dograh-chat-header';
+    const title = document.createElement('span');
+    title.className = 'dograh-chat-title';
+    title.textContent = 'Chat';
+    const statusEl = document.createElement('span');
+    statusEl.className = 'dograh-chat-status';
+    statusEl.id = 'dograh-chat-status';
+    statusEl.textContent = state.chatStatus || 'idle';
+    header.appendChild(title);
+    header.appendChild(statusEl);
+    panel.appendChild(header);
+
+    // Messages
+    const messages = document.createElement('div');
+    messages.className = 'dograh-chat-messages';
+    messages.id = 'dograh-chat-messages';
+
+    const visibleTurns = (state.chatTurns || []).filter(
+      (turn) => (turn.user_message && turn.user_message.text) || (turn.assistant_message && turn.assistant_message.text)
+    );
+
+    if (visibleTurns.length === 0 && !state.chatSending) {
+      const empty = document.createElement('div');
+      empty.className = 'dograh-chat-empty';
+      empty.textContent = 'Send a message to start the conversation.';
+      messages.appendChild(empty);
+    } else {
+      for (const turn of state.chatTurns) {
+        if (turn.user_message && turn.user_message.text) {
+          messages.appendChild(renderChatBubble('user', turn.user_message.text));
+        }
+        if (turn.assistant_message && turn.assistant_message.text) {
+          messages.appendChild(renderChatBubble('assistant', turn.assistant_message.text));
+        }
+      }
+    }
+
+    if (state.chatSending) {
+      messages.appendChild(renderChatTyping());
+    }
+
+    panel.appendChild(messages);
+
+    // Error banner
+    const errorEl = document.createElement('div');
+    errorEl.className = 'dograh-chat-error' + (state.chatError ? ' dograh-visible' : '');
+    errorEl.id = 'dograh-chat-error';
+    errorEl.textContent = state.chatError || '';
+    panel.appendChild(errorEl);
+
+    // Input row
+    const inputRow = document.createElement('div');
+    inputRow.className = 'dograh-chat-input-row';
+
+    const input = document.createElement('textarea');
+    input.className = 'dograh-chat-input';
+    input.id = 'dograh-chat-input';
+    input.rows = 1;
+    input.placeholder = state.chatSending ? 'Sending...' : 'Send a message...';
+    input.value = state.chatDraft || '';
+    input.disabled = state.chatSending;
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        if (state.chatSending) return;
+        const text = input.value;
+        if (!text.trim()) return;
+        sendChatMessage(text).then(() => {
+          // Draft is cleared on successful send; refocus the fresh input.
+          const fresh = document.getElementById('dograh-chat-input');
+          if (fresh) fresh.focus();
+        });
+      }
+    });
+    input.addEventListener('input', () => {
+      state.chatDraft = input.value;
+    });
+
+    const sendBtn = document.createElement('button');
+    sendBtn.type = 'button';
+    sendBtn.className = 'dograh-chat-send';
+    sendBtn.id = 'dograh-chat-send';
+    sendBtn.textContent = state.chatSending ? 'Sending' : 'Send';
+    sendBtn.disabled = state.chatSending || !(input.value || '').trim();
+    sendBtn.addEventListener('click', () => {
+      if (state.chatSending) return;
+      const text = input.value;
+      if (!text.trim()) return;
+      sendChatMessage(text).then(() => {
+        const fresh = document.getElementById('dograh-chat-input');
+        if (fresh) fresh.focus();
+      });
+    });
+
+    inputRow.appendChild(input);
+    inputRow.appendChild(sendBtn);
+    panel.appendChild(inputRow);
+
+    // Defer auto-scroll until the panel is in the DOM.
+    requestAnimationFrame(() => {
+      const msgs = document.getElementById('dograh-chat-messages');
+      if (msgs) msgs.scrollTop = msgs.scrollHeight;
+      const focusInput = document.getElementById('dograh-chat-input');
+      if (focusInput && !state.chatSending) focusInput.focus();
+    });
+
+    return panel;
+  }
+
+  /**
+   * Re-render whichever surface is active (floating/inline chat panel or
+   * voice UI) without disturbing an in-progress voice call.
+   */
+  function renderChat() {
+    if (state.config.embedMode === 'floating') {
+      renderFloating();
+    } else if (state.config.embedMode === 'inline') {
+      renderInline();
+    }
+  }
+
+  /**
+   * Switch between voice and chat modes. Switching to chat initializes a
+   * chat session and renders the chat panel; switching to voice tears down
+   * the chat UI and shows the voice CTA.
+   */
+  function setMode(nextMode) {
+    if (nextMode !== 'voice' && nextMode !== 'chat') return;
+    if (!(state.config.modes || []).includes(nextMode)) return;
+    if (state.mode === nextMode) return;
+
+    state.mode = nextMode;
+
+    if (nextMode === 'chat') {
+      renderChat();
+      if (!state.chatSessionInited) {
+        initChatSession();
+      }
+    } else {
+      // Leaving chat: stop any pending send but keep the session for reuse.
+      state.chatSending = false;
+      renderChat();
+    }
+  }
+
+  /**
+   * Initialize a text-chat session via POST /text-chat/init.
+   */
+  async function initChatSession() {
+    if (!state.config.token) {
+      state.chatError = 'No embed token available for chat.';
+      renderChat();
+      return;
+    }
+
+    state.chatError = null;
+    try {
+      const response = await fetch(`${state.config.apiBaseUrl}/api/v1/public/embed/text-chat/init`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Origin': window.location.origin
+        },
+        body: JSON.stringify({
+          token: state.config.token,
+          context_variables: state.config.contextVariables || {}
+        })
+      });
+
+      if (!response.ok) {
+        let detail = `Failed to init chat session (${response.status})`;
+        try {
+          const errBody = await response.json();
+          detail = errBody.message || errBody.detail || detail;
+        } catch (e) { /* ignore parse error */ }
+        throw new Error(detail);
+      }
+
+      const data = await response.json();
+      const prevStatus = state.chatStatus;
+      state.chatSessionToken = data.session_token;
+      state.chatRunId = data.workflow_run_id;
+      state.chatRevision = data.revision;
+      state.chatTurns = Array.isArray(data.turns) ? data.turns : [];
+      state.chatStatus = data.status || 'idle';
+      state.chatSessionInited = true;
+      state.chatError = null;
+
+      fireChatStatusChange(prevStatus, state.chatStatus);
+      renderChat();
+    } catch (error) {
+      console.error('Dograh Widget: chat init failed', error);
+      state.chatSessionInited = false;
+      state.chatError = error.message || 'Failed to start chat session.';
+      renderChat();
+    }
+  }
+
+  /**
+   * Refresh chat session state via GET /text-chat/{session_token}.
+   */
+  async function refreshChatSession() {
+    if (!state.chatSessionToken) return;
+    try {
+      const response = await fetch(`${state.config.apiBaseUrl}/api/v1/public/embed/text-chat/${state.chatSessionToken}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Origin': window.location.origin
+        }
+      });
+      if (!response.ok) return;
+      const data = await response.json();
+      const prevStatus = state.chatStatus;
+      state.chatRevision = data.revision;
+      state.chatTurns = Array.isArray(data.turns) ? data.turns : [];
+      state.chatStatus = data.status || state.chatStatus;
+      fireChatStatusChange(prevStatus, state.chatStatus);
+      renderChat();
+    } catch (error) {
+      console.warn('Dograh Widget: chat refresh failed', error);
+    }
+  }
+
+  /**
+   * Send a chat message via POST /text-chat/{session_token}/messages.
+   * Auto-inits the session if needed; retries once on revision conflict (409).
+   */
+  async function sendChatMessage(text) {
+    const trimmed = (text || '').trim();
+    if (!trimmed) return;
+
+    if (!state.chatSessionInited) {
+      await initChatSession();
+      if (!state.chatSessionInited) return;
+    }
+
+    state.chatSending = true;
+    state.chatError = null;
+    state.chatDraft = '';
+    renderChat();
+
+    try {
+      const response = await fetch(`${state.config.apiBaseUrl}/api/v1/public/embed/text-chat/${state.chatSessionToken}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Origin': window.location.origin
+        },
+        body: JSON.stringify({
+          text: trimmed,
+          expected_revision: state.chatRevision
+        })
+      });
+
+      if (response.status === 409) {
+        // Revision conflict: refresh once, then retry the send a single time.
+        await refreshChatSession();
+        state.chatSending = false;
+        renderChat();
+        await sendChatMessageOnce(trimmed);
+        return;
+      }
+
+      if (!response.ok) {
+        let detail = `Failed to send message (${response.status})`;
+        try {
+          const errBody = await response.json();
+          detail = errBody.message || errBody.detail || detail;
+        } catch (e) { /* ignore parse error */ }
+        throw new Error(detail);
+      }
+
+      const data = await response.json();
+      const prevStatus = state.chatStatus;
+      state.chatRevision = data.revision;
+      state.chatTurns = Array.isArray(data.turns) ? data.turns : [];
+      state.chatStatus = data.status || state.chatStatus;
+      state.chatSending = false;
+      fireChatStatusChange(prevStatus, state.chatStatus);
+      fireChatMessage();
+      renderChat();
+    } catch (error) {
+      console.error('Dograh Widget: chat send failed', error);
+      state.chatSending = false;
+      state.chatError = error.message || 'Failed to send message.';
+      renderChat();
+    }
+  }
+
+  /**
+   * Single send attempt without the 409-retry loop (used after a refresh).
+   */
+  async function sendChatMessageOnce(text) {
+    state.chatSending = true;
+    renderChat();
+    try {
+      const response = await fetch(`${state.config.apiBaseUrl}/api/v1/public/embed/text-chat/${state.chatSessionToken}/messages`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Origin': window.location.origin
+        },
+        body: JSON.stringify({
+          text: text,
+          expected_revision: state.chatRevision
+        })
+      });
+      if (!response.ok) {
+        let detail = `Failed to send message (${response.status})`;
+        try {
+          const errBody = await response.json();
+          detail = errBody.message || errBody.detail || detail;
+        } catch (e) { /* ignore */ }
+        throw new Error(detail);
+      }
+      const data = await response.json();
+      const prevStatus = state.chatStatus;
+      state.chatRevision = data.revision;
+      state.chatTurns = Array.isArray(data.turns) ? data.turns : [];
+      state.chatStatus = data.status || state.chatStatus;
+      state.chatSending = false;
+      fireChatStatusChange(prevStatus, state.chatStatus);
+      fireChatMessage();
+      renderChat();
+    } catch (error) {
+      console.error('Dograh Widget: chat send retry failed', error);
+      state.chatSending = false;
+      state.chatError = error.message || 'Failed to send message.';
+      renderChat();
+    }
+  }
+
+  function fireChatMessage() {
+    if (state.chatCallbacks.onChatMessage) {
+      const last = state.chatTurns[state.chatTurns.length - 1];
+      const assistantText = last && last.assistant_message ? last.assistant_message.text : null;
+      state.chatCallbacks.onChatMessage({
+        turns: state.chatTurns,
+        status: state.chatStatus,
+        revision: state.chatRevision,
+        lastAssistantMessage: assistantText
+      });
+    }
+  }
+
+  function fireChatStatusChange(prev, next) {
+    if (state.chatCallbacks.onChatStatusChange && prev !== next) {
+      state.chatCallbacks.onChatStatusChange(next, prev);
+    }
   }
 
   /**
@@ -321,9 +1045,11 @@
   }
 
   /**
-   * Toggle call (start or stop based on current state)
+   * Toggle call (start or stop based on current state). No-op while the
+   * widget is in chat mode — the mode toggle controls which UI is active.
    */
   function toggleCall() {
+    if (state.mode === 'chat') return;
     if (state.connectionStatus === 'idle' || state.connectionStatus === 'failed') {
       startCall();
     } else {
@@ -354,11 +1080,18 @@
     container.innerHTML = '';
     container.className = 'dograh-inline-container';
 
-    // Add minimal inline styles
+    // Inline styles (voice status + container layout for toggle/chat).
     const inlineStyles = `
       .dograh-inline-container {
         min-height: 200px;
-        padding: 20px;
+        padding: 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .dograh-inline-voice-wrap {
+        flex: 1;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -450,10 +1183,7 @@
       document.head.appendChild(styleSheet);
     }
 
-    // Create initial status display
-    updateInlineStatus('idle');
-
-    // Store audio element (hidden)
+    // Store audio element (hidden) before first render so it persists.
     state.audioElement = document.createElement('audio');
     state.audioElement.autoplay = true;
     state.audioElement.style.display = 'none';
@@ -461,10 +1191,100 @@
 
     // Mark widget as open (for inline mode, it's always "open")
     state.isOpen = true;
+
+    // Initial render (toggle + voice status or chat panel).
+    renderInline();
   }
 
   /**
-   * Update inline widget status
+   * Render the inline surface: mode toggle (if both modes) plus either the
+   * chat panel (chat mode) or the voice status display (voice mode).
+   * Preserves the hidden audio element across re-renders.
+   */
+  function renderInline() {
+    const container = document.getElementById(state.config.containerId);
+    if (!container) return;
+
+    Array.from(container.children).forEach((child) => {
+      if (child !== state.audioElement) container.removeChild(child);
+    });
+
+    const toggle = renderModeToggle();
+    if (toggle) {
+      injectChatStyles();
+      container.appendChild(toggle);
+    }
+
+    if (state.mode === 'chat' && chatEnabled()) {
+      injectChatStyles();
+      container.appendChild(renderChatPanel('inline'));
+    } else {
+      container.appendChild(renderInlineVoice(state.connectionStatus));
+    }
+  }
+
+  /**
+   * Build the inline voice status display (icon + text + start/end button).
+   */
+  function renderInlineVoice(status) {
+    const wrap = document.createElement('div');
+    wrap.className = 'dograh-inline-voice-wrap';
+
+    const displayText = state.inlineDisplayText || {
+      idle: 'Ready to Connect',
+      connecting: 'Connecting...',
+      connected: 'Call Active',
+      failed: 'Connection Failed'
+    }[status];
+
+    const displaySubtext = state.inlineDisplaySubtext || {
+      idle: state.config.callToActionText,
+      connecting: 'Please wait while we establish connection',
+      connected: 'You can speak now',
+      failed: 'Please check your microphone and try again'
+    }[status];
+
+    let buttonHTML = '';
+    if (status === 'idle' || status === 'failed') {
+      buttonHTML = `
+        <button class="dograh-inline-btn dograh-inline-btn-start" id="dograh-inline-start-btn" style="background: ${state.config.buttonColor};">
+          ${status === 'failed' ? 'Retry' : state.config.buttonText}
+        </button>
+      `;
+    } else if (status === 'connecting' || status === 'connected') {
+      buttonHTML = `
+        <button class="dograh-inline-btn dograh-inline-btn-end" id="dograh-inline-end-btn">
+          End Call
+        </button>
+      `;
+    }
+
+    wrap.innerHTML = `
+      <div class="dograh-inline-status">
+        <div class="dograh-inline-status-icon ${status === 'connecting' ? 'dograh-inline-pulse' : ''}">
+          ${getStatusIcon(status)}
+        </div>
+        <p class="dograh-inline-status-text">${displayText}</p>
+        <p class="dograh-inline-status-subtext">${displaySubtext}</p>
+        <div class="dograh-inline-button-container">
+          ${buttonHTML}
+        </div>
+      </div>
+    `;
+
+    const startBtn = wrap.querySelector('#dograh-inline-start-btn');
+    if (startBtn) startBtn.onclick = startCall;
+
+    const endBtn = wrap.querySelector('#dograh-inline-end-btn');
+    if (endBtn) endBtn.onclick = stopCall;
+
+    return wrap;
+  }
+
+  /**
+   * Update inline widget status. Stores the resolved display text, fires the
+   * status-change callback, and re-renders the voice surface — unless the
+   * widget is in chat mode, in which case the chat panel stays put.
    */
   function updateInlineStatus(status, text, subtext) {
     const container = document.getElementById(state.config.containerId);
@@ -488,55 +1308,18 @@
       failed: 'Please check your microphone and try again'
     }[status];
 
-    // Simple button design: green to start, red to end
-    let buttonHTML = '';
-    if (status === 'idle' || status === 'failed') {
-      // Button to start with configured color
-      buttonHTML = `
-        <button class="dograh-inline-btn dograh-inline-btn-start" id="dograh-inline-start-btn" style="background: ${state.config.buttonColor};">
-          ${status === 'failed' ? 'Retry' : state.config.buttonText}
-        </button>
-      `;
-    } else if (status === 'connecting' || status === 'connected') {
-      // Red button to end
-      buttonHTML = `
-        <button class="dograh-inline-btn dograh-inline-btn-end" id="dograh-inline-end-btn">
-          End Call
-        </button>
-      `;
-    }
-
-    // Update container content (preserve audio element)
-    const audioElement = state.audioElement;
-    container.innerHTML = `
-      <div class="dograh-inline-status">
-        <div class="dograh-inline-status-icon ${status === 'connecting' ? 'dograh-inline-pulse' : ''}">
-          ${getStatusIcon(status)}
-        </div>
-        <p class="dograh-inline-status-text">${displayText}</p>
-        <p class="dograh-inline-status-subtext">${displaySubtext}</p>
-        <div class="dograh-inline-button-container">
-          ${buttonHTML}
-        </div>
-      </div>
-    `;
-
-    // Re-append audio element
-    if (audioElement) {
-      container.appendChild(audioElement);
-    }
-
-    // Attach event handlers
-    const startBtn = document.getElementById('dograh-inline-start-btn');
-    if (startBtn) startBtn.onclick = startCall;
-
-    const endBtn = document.getElementById('dograh-inline-end-btn');
-    if (endBtn) endBtn.onclick = stopCall;
+    state.inlineDisplayText = displayText;
+    state.inlineDisplaySubtext = displaySubtext;
 
     // Trigger status change callback
     if (state.callbacks.onStatusChange) {
       state.callbacks.onStatusChange(status, displayText, displaySubtext);
     }
+
+    // In chat mode the chat panel owns the surface; do not overwrite it.
+    if (state.mode === 'chat' && chatEnabled()) return;
+
+    renderInline();
   }
 
   /**
@@ -613,6 +1396,7 @@
    * Start voice call
    */
   async function startCall() {
+    if (state.mode === 'chat') return;
     state.gracefulDisconnect = false;
     updateStatus('connecting', 'Connecting...', 'Please wait while we establish the connection');
 
@@ -1084,14 +1868,42 @@
     onError: (callback) => { state.callbacks.onError = callback; },
     onStatusChange: (callback) => { state.callbacks.onStatusChange = callback; },
 
+    // Text-chat API
+    setMode: (mode) => setMode(mode),
+    getMode: () => state.mode,
+    getModes: () => (state.config.modes || []).slice(),
+    startChat: () => {
+      if (!chatEnabled()) return Promise.resolve(false);
+      setMode('chat');
+      if (!state.chatSessionInited) {
+        return initChatSession().then(() => state.chatSessionInited);
+      }
+      return Promise.resolve(true);
+    },
+    sendChatMessage: (text) => sendChatMessage(text),
+    refreshChat: () => refreshChatSession(),
+    onChatMessage: (callback) => { state.chatCallbacks.onChatMessage = callback; },
+    onChatStatusChange: (callback) => { state.chatCallbacks.onChatStatusChange = callback; },
+    getChatState: () => ({
+      sessionToken: state.chatSessionToken,
+      workflowRunId: state.chatRunId,
+      revision: state.chatRevision,
+      turns: state.chatTurns,
+      status: state.chatStatus,
+      sending: state.chatSending,
+      sessionInited: state.chatSessionInited,
+      error: state.chatError
+    }),
+
     // Check if inline mode
     isInlineMode: () => state.config.embedMode === 'inline',
 
-    // Re-render the inline widget (useful when React component remounts)
+    // Re-render the active widget surface (inline or floating)
     refresh: () => {
       if (state.config.embedMode === 'inline') {
-        // Re-render inline widget with current status
         updateInlineStatus(state.connectionStatus);
+      } else if (state.config.embedMode === 'floating') {
+        renderFloating();
       }
     },
 
@@ -1110,6 +1922,8 @@
       if (options.onCallEnd) state.callbacks.onCallEnd = options.onCallEnd;
       if (options.onError) state.callbacks.onError = options.onError;
       if (options.onStatusChange) state.callbacks.onStatusChange = options.onStatusChange;
+      if (options.onChatMessage) state.chatCallbacks.onChatMessage = options.onChatMessage;
+      if (options.onChatStatusChange) state.chatCallbacks.onChatStatusChange = options.onChatStatusChange;
 
       // Initialize
       if (!state.isInitialized) {
