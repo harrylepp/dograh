@@ -419,17 +419,90 @@ export function EmbedDialog({
 
                                     {/* Preview (skipped for headless — host renders its own UI) */}
                                     {embedMode === "headless" ? null : embedMode === "floating" ? (
-                                        <div className="rounded-lg border bg-muted/30 p-6 flex items-center justify-center">
-                                            <button
-                                                className="inline-flex items-center gap-2 rounded-full px-5 py-3 font-medium text-white shadow-lg whitespace-nowrap"
-                                                style={{ backgroundColor: buttonColor }}
-                                            >
-                                                <Mic className="h-4 w-4" />
-                                                {buttonText || "Talk to Agent"}
-                                            </button>
+                                        <div className="rounded-lg border bg-muted/30 p-6 flex flex-col items-center justify-center gap-3">
+                                            {chatEnabled && (
+                                                <div className="inline-flex items-center gap-0.5 p-1 rounded-xl bg-white shadow-sm dark:bg-zinc-900">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setDefaultMode("voice")}
+                                                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                                                            defaultMode === "voice"
+                                                                ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                                                                : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                                                        }`}
+                                                    >
+                                                        Voice
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setDefaultMode("chat")}
+                                                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                                                            defaultMode === "chat"
+                                                                ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                                                                : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                                                        }`}
+                                                    >
+                                                        Chat
+                                                    </button>
+                                                </div>
+                                            )}
+                                            {chatEnabled && defaultMode === "chat" ? (
+                                                <div className="w-[280px] h-[200px] flex flex-col rounded-2xl bg-white shadow-lg overflow-hidden dark:bg-zinc-900">
+                                                    <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-100 dark:border-zinc-800">
+                                                        <span className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">Chat</span>
+                                                        <span className="text-[10px] text-zinc-500">idle</span>
+                                                    </div>
+                                                    <div className="flex-1 flex items-center justify-center px-3">
+                                                        <span className="text-[11px] text-zinc-400">Send a message to start the conversation.</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2 px-3 py-2.5 border-t border-zinc-100 dark:border-zinc-800">
+                                                        <div className="flex-1 h-9 rounded-lg border border-zinc-200 dark:border-zinc-700" />
+                                                        <div
+                                                            className="h-9 px-3 rounded-lg flex items-center text-xs font-semibold text-white"
+                                                            style={{ backgroundColor: buttonColor }}
+                                                        >
+                                                            Send
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <button
+                                                    className="inline-flex items-center gap-2 rounded-full px-5 py-3 font-medium text-white shadow-lg whitespace-nowrap"
+                                                    style={{ backgroundColor: buttonColor }}
+                                                >
+                                                    <Mic className="h-4 w-4" />
+                                                    {buttonText || "Talk to Agent"}
+                                                </button>
+                                            )}
                                         </div>
                                     ) : (
-                                        <div className="rounded-lg border bg-background p-6 flex items-center justify-center">
+                                        <div className="rounded-lg border bg-background p-6 flex flex-col items-center justify-center gap-4">
+                                            {chatEnabled && (
+                                                <div className="inline-flex items-center gap-0.5 p-1 rounded-xl bg-white shadow-sm dark:bg-zinc-900">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setDefaultMode("voice")}
+                                                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                                                            defaultMode === "voice"
+                                                                ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                                                                : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                                                        }`}
+                                                    >
+                                                        Voice
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setDefaultMode("chat")}
+                                                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                                                            defaultMode === "chat"
+                                                                ? "bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-900"
+                                                                : "text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                                                        }`}
+                                                    >
+                                                        Chat
+                                                    </button>
+                                                </div>
+                                            )}
                                             <div className="text-center">
                                                 <svg className="w-16 h-16 mx-auto mb-4 text-muted-foreground" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
                                                     <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
